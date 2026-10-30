@@ -1,0 +1,23 @@
+[package]
+name = "shop-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared database (local SQLite or Turso), auth and web helpers for JCS MotorParts"
+
+[features]
+default = ["local"]
+# Local SQLite file support (bundled SQLite). Off for the Vercel build, which uses Turso.
+local = ["dep:rusqlite"]
+
+[dependencies]
+axum.workspace = true
+tokio.workspace = true
+rusqlite = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+argon2.workspace = true
+rand.workspace = true
+base64.workspace = true
+open.workspace = true
+reqwest.workspace = true

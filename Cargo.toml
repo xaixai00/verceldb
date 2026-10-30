@@ -1,0 +1,55 @@
+# Root package = the Vercel deployment (one function serving store + admin).
+# The Windows .exe apps live in crates/shop-admin and crates/shop-customer.
+[package]
+name = "jcs-vercel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "JCS MotorParts on Vercel: customer store at /, admin at /admin"
+publish = false
+
+# Vercel builds every `api/*.rs` listed here as a function.
+[[bin]]
+name = "index"
+path = "api/index.rs"
+
+[features]
+# Lets you run the Vercel entry point against a local shop.db for testing.
+local = ["shop-core/local"]
+
+[dependencies]
+shop-core = { workspace = true, default-features = false }
+shop-admin = { path = "crates/shop-admin", default-features = false }
+shop-customer = { path = "crates/shop-customer", default-features = false }
+axum.workspace = true
+tokio.workspace = true
+tower = "0.5"
+vercel_runtime = { version = "2", features = ["axum"] }
+
+[workspace]
+resolver = "2"
+members = [".", "crates/shop-core", "crates/shop-admin", "crates/shop-customer"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+argon2 = "0.5"
+rand = "0.8"
+base64 = "0.22"
+open = "5"
+shop-core = { path = "crates/shop-core", default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

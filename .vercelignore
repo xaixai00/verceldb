@@ -1,0 +1,8 @@
+# Keep uploads small; Vercel compiles from source.
+target/
+dist/
+*.db
+*.db-wal
+*.db-shm
+.github/
+tools/
