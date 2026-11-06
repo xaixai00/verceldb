@@ -38,7 +38,9 @@ pub async fn verify(token: Option<&str>, remote_ip: Option<&str>) -> Result<(), 
     if site_key().is_none() {
         return Ok(());
     }
-    let token = token.map(str::trim).filter(|t| !t.is_empty() && t.len() <= 2048);
+    let token = token
+        .map(str::trim)
+        .filter(|t| !t.is_empty() && t.len() <= 2048);
     let Some(token) = token else {
         return Err(ApiError::bad_request(
             "Please complete the “I'm not a robot” check",
