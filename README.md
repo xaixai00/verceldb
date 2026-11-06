@@ -63,6 +63,7 @@ The app creates its tables automatically on the first request.
    | `TURSO_DATABASE_URL` | the `libsql://…` URL |
    | `TURSO_AUTH_TOKEN` | the token |
    | `ADMIN_PASSWORD` | a long password for `/admin` |
+   | `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | *(optional)* turns on the "I'm not a robot" check, see [CAPTCHA](#captcha-optional) |
 
 4. **Deploy.** The first build compiles Rust and takes a few minutes; later builds are cached.
 
@@ -74,6 +75,15 @@ If you connect Turso through the Vercel Marketplace integration instead, check t
 - Admin: `https://<your-project>.vercel.app/admin` → sign in with `ADMIN_PASSWORD` → **Products → Load sample products** to try it out.
 
 Changing an environment variable needs a **Redeploy** (Deployments → ⋯ → Redeploy) to take effect. If something's missing, the site shows a "can't start yet" page that names the problem.
+
+### CAPTCHA (optional)
+
+Sign in, Create account and the admin sign-in can require Cloudflare Turnstile (free, usually invisible or one click):
+
+1. https://dash.cloudflare.com → **Turnstile → Add widget**, add your Vercel domain (e.g. `your-project.vercel.app`), mode **Managed**.
+2. Add the **Site Key** as `TURNSTILE_SITE_KEY` and the **Secret Key** as `TURNSTILE_SECRET_KEY` in Vercel, then **Redeploy**.
+
+The token is verified on the server, so bots can't skip it by calling the API directly. If either variable is missing the check is simply off (the default for the offline .exe apps). To test locally use Cloudflare's dummy keys: site `1x00000000000000000000AA`, secret `1x0000000000000000000000000000000AA` (always pass).
 
 ### How it's wired
 

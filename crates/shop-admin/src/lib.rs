@@ -21,7 +21,7 @@ use base64::Engine;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use shop_core::{
-    auth,
+    auth, captcha,
     db::{CustomerSummary, Product, ProductInput, Settings},
     web::{self, ApiError, ApiResult},
     Db,
@@ -99,6 +99,7 @@ pub fn router(db: Db, cfg: AdminConfig) -> Router {
         .route("/static/jcs-logo.svg", get(web::jcs_logo_svg))
         .route("/images/{id}", get(web::image))
         .route("/api/auth/status", get(auth_status))
+        .route("/api/captcha", get(captcha_config))
         .route("/api/auth/login", post(login))
         .route("/api/auth/logout", post(logout))
         .merge(api)
@@ -193,10 +194,18 @@ async fn auth_status(State(state): State<AdminState>, headers: HeaderMap) -> Api
 #[derive(Deserialize)]
 struct LoginBody {
     password: String,
+    #[serde(default)]
+    captcha_token: Option<String>,
+}
+
+/// `GET /api/captcha` – tells the page whether to show the human check.
+async fn captcha_config() -> Json<Value> {
+    Json(json!({ "site_key": captcha::site_key() }))
 }
 
 async fn login(
     State(state): State<AdminState>,
+    headers: HeaderMap,
     Json(body): Json<LoginBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let Some(expected) = state.cfg.password.as_deref() else {
@@ -206,6 +215,11 @@ async fn login(
             not_configured()
         });
     };
+    captcha::verify(
+        body.captcha_token.as_deref(),
+        captcha::client_ip(&headers).as_deref(),
+    )
+    .await?;
     if !auth::constant_time_eq(body.password.as_str(), expected) {
         // Slow down guessing.
         tokio::time::sleep(std::time::Duration::from_millis(700)).await;

@@ -104,6 +104,7 @@
       <label class="field">Admin password
         <input type="password" name="password" autocomplete="current-password" required>
       </label>
+      <div id="captcha-box" class="hidden" style="min-height:65px"></div>
       <div class="form-error" id="login-error"></div>
       <button class="btn primary lg block" type="submit" id="login-submit">Sign in</button>
     </form>
@@ -641,12 +642,55 @@ async function loadCustomers() {
   } catch (e) { toast(e.message, true); }
 }
 
+
+/* ---------------- CAPTCHA (Cloudflare Turnstile, optional) ---------------- */
+const captcha = { key: null, id: null, token: '' };
+let captchaInit = null;
+function initCaptcha(boxSel) { return (captchaInit ||= setupCaptcha(boxSel)); }
+async function setupCaptcha(boxSel) {
+  try {
+    const cfg = await fetch(BASE + '/api/captcha', { credentials: 'same-origin' }).then(r => r.json());
+    captcha.key = cfg && cfg.site_key;
+  } catch { captcha.key = null; }
+  if (!captcha.key) return;
+  const box = $(boxSel);
+  box.classList.remove('hidden');
+  await new Promise((resolve, reject) => {
+    if (window.turnstile) return resolve();
+    const s = document.createElement('script');
+    s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+    s.async = true; s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  }).catch(() => { box.textContent = 'Could not load the human check. Check your connection and reload.'; });
+  if (!window.turnstile) return;
+  captcha.id = window.turnstile.render(box, {
+    sitekey: captcha.key,
+    theme: 'dark',
+    callback: (t) => { captcha.token = t; },
+    'expired-callback': () => { captcha.token = ''; },
+    'error-callback': () => { captcha.token = ''; },
+  });
+}
+/* Returns true if sign-in may proceed (no captcha configured, or solved). */
+function captchaReady(errEl) {
+  if (captcha.key && !captcha.token) {
+    errEl.textContent = "Please complete the \u201cI'm not a robot\u201d check.";
+    return false;
+  }
+  return true;
+}
+/* Tokens are single-use: always get a fresh one after an attempt. */
+function captchaReset() {
+  captcha.token = '';
+  if (captcha.id !== null && window.turnstile) window.turnstile.reset(captcha.id);
+}
+
 /* ---------------- sign-in gate ---------------- */
 function showGate(mode) {
   $('#gate').classList.remove('hidden');
   $('#login-form').classList.toggle('hidden', mode !== 'login');
   $('#gate-locked').classList.toggle('hidden', mode !== 'locked');
-  if (mode === 'login') $('#login-form [name=password]').focus({ preventScroll: true });
+  if (mode === 'login') { initCaptcha('#captcha-box'); $('#login-form [name=password]').focus({ preventScroll: true }); }
 }
 
 $('#login-form').addEventListener('submit', async (e) => {
@@ -654,10 +698,11 @@ $('#login-form').addEventListener('submit', async (e) => {
   const password = e.target.password.value;
   $('#login-error').textContent = '';
   if (!password) { $('#login-error').textContent = 'Enter the admin password.'; return; }
+  if (!captchaReady($('#login-error'))) return;
   const btn = $('#login-submit');
   btn.disabled = true;
   try {
-    await api('/api/auth/login', { method: 'POST', body: { password } });
+    await api('/api/auth/login', { method: 'POST', body: { password, captcha_token: captcha.token } });
     e.target.reset();
     $('#gate').classList.add('hidden');
     $('#admin-logout').classList.remove('hidden');
@@ -665,6 +710,7 @@ $('#login-form').addEventListener('submit', async (e) => {
   } catch (ex) {
     $('#login-error').textContent = ex.message;
   } finally {
+    captchaReset();
     btn.disabled = false;
   }
 });

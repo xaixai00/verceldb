@@ -12,7 +12,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use shop_core::{
-    auth,
+    auth, captcha,
     db::{Cart, Product, Settings, User},
     web::{self, ApiError, ApiResult},
     Db,
@@ -44,6 +44,7 @@ pub fn router(state: CustomerState) -> Router {
         .route("/static/jcs-logo.svg", get(web::jcs_logo_svg))
         .route("/images/{id}", get(web::image))
         .route("/api/settings", get(settings))
+        .route("/api/captcha", get(captcha_config))
         .route("/api/auth/signup", post(signup))
         .route("/api/auth/login", post(login))
         .route("/api/auth/logout", post(logout))
@@ -105,12 +106,21 @@ struct SignupBody {
     name: String,
     email: String,
     password: String,
+    #[serde(default)]
+    captcha_token: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct LoginBody {
     email: String,
     password: String,
+    #[serde(default)]
+    captcha_token: Option<String>,
+}
+
+/// `GET /api/captcha` – tells the page whether to show the human check.
+async fn captcha_config() -> Json<Value> {
+    Json(json!({ "site_key": captcha::site_key() }))
 }
 
 fn valid_email(email: &str) -> bool {
@@ -127,8 +137,14 @@ fn valid_email(email: &str) -> bool {
 
 async fn signup(
     State(state): State<CustomerState>,
+    headers: HeaderMap,
     Json(body): Json<SignupBody>,
 ) -> Result<impl IntoResponse, ApiError> {
+    captcha::verify(
+        body.captcha_token.as_deref(),
+        captcha::client_ip(&headers).as_deref(),
+    )
+    .await?;
     let name = body.name.trim().to_string();
     let email = body.email.trim().to_lowercase();
     if name.is_empty() {
@@ -159,8 +175,14 @@ async fn signup(
 
 async fn login(
     State(state): State<CustomerState>,
+    headers: HeaderMap,
     Json(body): Json<LoginBody>,
 ) -> Result<impl IntoResponse, ApiError> {
+    captcha::verify(
+        body.captcha_token.as_deref(),
+        captcha::client_ip(&headers).as_deref(),
+    )
+    .await?;
     let wrong = || {
         ApiError(
             StatusCode::UNAUTHORIZED,

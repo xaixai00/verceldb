@@ -148,6 +148,7 @@
         <label class="field signup-only hidden">Confirm password
           <input type="password" name="confirm" autocomplete="new-password">
         </label>
+        <div id="captcha-box" class="hidden" style="min-height:65px"></div>
         <div class="form-error" id="auth-error"></div>
         <button class="btn primary lg block" type="submit" id="auth-submit">Sign in</button>
       </form>
@@ -354,6 +355,49 @@ async function loadSettings() {
   $$('.shop-tagline').forEach(el => (el.textContent = state.settings.tagline));
 }
 
+
+/* ---------------- CAPTCHA (Cloudflare Turnstile, optional) ---------------- */
+const captcha = { key: null, id: null, token: '' };
+let captchaInit = null;
+function initCaptcha(boxSel) { return (captchaInit ||= setupCaptcha(boxSel)); }
+async function setupCaptcha(boxSel) {
+  try {
+    const cfg = await fetch('/api/captcha', { credentials: 'same-origin' }).then(r => r.json());
+    captcha.key = cfg && cfg.site_key;
+  } catch { captcha.key = null; }
+  if (!captcha.key) return;
+  const box = $(boxSel);
+  box.classList.remove('hidden');
+  await new Promise((resolve, reject) => {
+    if (window.turnstile) return resolve();
+    const s = document.createElement('script');
+    s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+    s.async = true; s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  }).catch(() => { box.textContent = 'Could not load the human check. Check your connection and reload.'; });
+  if (!window.turnstile) return;
+  captcha.id = window.turnstile.render(box, {
+    sitekey: captcha.key,
+    theme: 'dark',
+    callback: (t) => { captcha.token = t; },
+    'expired-callback': () => { captcha.token = ''; },
+    'error-callback': () => { captcha.token = ''; },
+  });
+}
+/* Returns true if sign-in may proceed (no captcha configured, or solved). */
+function captchaReady(errEl) {
+  if (captcha.key && !captcha.token) {
+    errEl.textContent = "Please complete the \u201cI'm not a robot\u201d check.";
+    return false;
+  }
+  return true;
+}
+/* Tokens are single-use: always get a fresh one after an attempt. */
+function captchaReset() {
+  captcha.token = '';
+  if (captcha.id !== null && window.turnstile) window.turnstile.reset(captcha.id);
+}
+
 /* ---------------- auth ---------------- */
 let authMode = 'login';
 function setAuthMode(mode) {
@@ -384,6 +428,8 @@ $('#auth-form').addEventListener('submit', async (e) => {
     if (password !== f.get('confirm')) { err.textContent = "Passwords don't match."; return; }
     body.name = name; path = '/api/auth/signup';
   }
+  if (!captchaReady(err)) return;
+  body.captcha_token = captcha.token;
   const btn = $('#auth-submit');
   btn.disabled = true;
   try {
@@ -394,6 +440,7 @@ $('#auth-form').addEventListener('submit', async (e) => {
   } catch (ex) {
     err.textContent = ex.message;
   } finally {
+    captchaReset();
     btn.disabled = false;
   }
 });
@@ -403,6 +450,7 @@ function showAuth() {
   closeModal();
   $('#app').classList.add('hidden');
   $('#auth').classList.remove('hidden');
+  initCaptcha('#captcha-box');
   $('#auth-form [name=email]').focus({ preventScroll: true });
 }
 

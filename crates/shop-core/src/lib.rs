@@ -3,9 +3,11 @@
 //! * `sql`  – driver layer: local SQLite file or hosted Turso (libSQL over HTTP)
 //! * `db`   – the shop's tables and queries, on top of `sql`
 //! * `auth` – password hashing, session tokens, constant-time compare
+//! * `captcha` – optional Cloudflare Turnstile human check for sign-in
 //! * `web`  – error type, image/CSS handlers, cookies and the server runner
 
 pub mod auth;
+pub mod captcha;
 pub mod db;
 pub mod sql;
 pub mod web;
