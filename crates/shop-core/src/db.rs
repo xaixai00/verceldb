@@ -56,6 +56,13 @@ const SCHEMA: &[&str] = &[
         user_id     INTEGER NOT NULL,
         expires_at  INTEGER NOT NULL
     )",
+    "CREATE TABLE IF NOT EXISTS password_resets (
+        user_id     INTEGER PRIMARY KEY,
+        code_hash   TEXT    NOT NULL,
+        expires_at  INTEGER NOT NULL,
+        attempts    INTEGER NOT NULL DEFAULT 0,
+        sent_at     INTEGER NOT NULL
+    )",
     "CREATE TABLE IF NOT EXISTS admin_sessions (
         token       TEXT    PRIMARY KEY,
         expires_at  INTEGER NOT NULL
@@ -79,6 +86,12 @@ const SCHEMA: &[&str] = &[
 pub const MAX_CART_QTY: i64 = 999;
 const SESSION_TTL_SECS: i64 = 60 * 60 * 24 * 30;
 const ADMIN_SESSION_TTL_SECS: i64 = 60 * 60 * 12;
+/// How long a password-reset code stays valid.
+pub const RESET_CODE_TTL_SECS: i64 = 10 * 60;
+/// Wrong guesses allowed per code before it is thrown away.
+pub const RESET_MAX_ATTEMPTS: i64 = 5;
+/// Minimum gap between two codes for the same account.
+pub const RESET_COOLDOWN_SECS: i64 = 60;
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -795,6 +808,91 @@ impl Db {
         Ok(())
     }
 
+    // ----- password reset ---------------------------------------------------
+
+    /// Seconds still to wait before another code may be sent (0 = go ahead).
+    pub async fn reset_cooldown_left(&self, user_id: i64) -> DbResult<i64> {
+        let sent = self
+            .one(stmt!(
+                "SELECT sent_at FROM password_resets WHERE user_id = ?1",
+                user_id
+            ))
+            .await?
+            .map(|r| r.int(0))
+            .unwrap_or(0);
+        Ok((sent + RESET_COOLDOWN_SECS - now_unix()).max(0))
+    }
+
+    /// Store (or replace) the hashed reset code for an account.
+    pub async fn save_reset_code(&self, user_id: i64, code_hash: &str) -> DbResult<()> {
+        let now = now_unix();
+        self.batch(vec![
+            stmt!("DELETE FROM password_resets WHERE expires_at < ?1", now),
+            stmt!(
+                "INSERT INTO password_resets (user_id, code_hash, expires_at, attempts, sent_at)
+                 VALUES (?1, ?2, ?3, 0, ?4)
+                 ON CONFLICT(user_id) DO UPDATE SET
+                    code_hash = excluded.code_hash,
+                    expires_at = excluded.expires_at,
+                    attempts = 0,
+                    sent_at = excluded.sent_at",
+                user_id,
+                code_hash,
+                now + RESET_CODE_TTL_SECS,
+                now
+            ),
+        ])
+        .await?;
+        Ok(())
+    }
+
+    /// Count one guess against the account's code and return the code hash to
+    /// check it against. `None` when there is no usable code (none sent, expired,
+    /// or too many wrong guesses). Counting first means parallel guesses can't
+    /// sneak past the limit.
+    pub async fn take_reset_attempt(&self, user_id: i64) -> DbResult<Option<String>> {
+        let row = self
+            .one(stmt!(
+                "UPDATE password_resets SET attempts = attempts + 1
+                 WHERE user_id = ?1
+                 RETURNING code_hash, expires_at, attempts",
+                user_id
+            ))
+            .await?;
+        let Some(r) = row else {
+            return Ok(None);
+        };
+        if r.int(1) <= now_unix() || r.int(2) > RESET_MAX_ATTEMPTS {
+            self.delete_reset_code(user_id).await?;
+            return Ok(None);
+        }
+        Ok(Some(r.text(0)))
+    }
+
+    pub async fn delete_reset_code(&self, user_id: i64) -> DbResult<()> {
+        self.query(stmt!(
+            "DELETE FROM password_resets WHERE user_id = ?1",
+            user_id
+        ))
+        .await?;
+        Ok(())
+    }
+
+    /// Set a new password hash and sign the account out everywhere.
+    pub async fn set_password(&self, user_id: i64, password_hash: &str) -> DbResult<()> {
+        self.batch(vec![
+            stmt!(
+                "UPDATE users SET password_hash = ?1 WHERE id = ?2",
+                password_hash,
+                user_id
+            ),
+            stmt!("DELETE FROM sessions WHERE user_id = ?1", user_id),
+            stmt!("DELETE FROM password_resets WHERE user_id = ?1", user_id),
+        ])
+        .await?;
+        Ok(())
+    }
+
     // ----- admin sessions ---------------------------------------------------
 
     pub async fn create_admin_session(&self, token: &str) -> DbResult<()> {
@@ -845,6 +943,26 @@ impl Db {
                 cart_quantity: r.int(4),
             })
             .collect())
+    }
+
+    /// Permanently remove a customer account with everything tied to it:
+    /// sign-in sessions, pending reset codes and cart items.
+    pub async fn delete_customer(&self, id: i64) -> DbResult<()> {
+        let exists = self
+            .one(stmt!("SELECT 1 FROM users WHERE id = ?1", id))
+            .await?
+            .is_some();
+        if !exists {
+            return Err(DbError::NotFound);
+        }
+        self.batch(vec![
+            stmt!("DELETE FROM sessions WHERE user_id = ?1", id),
+            stmt!("DELETE FROM password_resets WHERE user_id = ?1", id),
+            stmt!("DELETE FROM cart_items WHERE user_id = ?1", id),
+            stmt!("DELETE FROM users WHERE id = ?1", id),
+        ])
+        .await?;
+        Ok(())
     }
 
     // ----- cart -----------------------------------------------------------

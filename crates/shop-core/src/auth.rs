@@ -2,7 +2,7 @@ use argon2::password_hash::{
     rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
 };
 use argon2::Argon2;
-use rand::RngCore;
+use rand::{Rng, RngCore};
 
 /// Hash a password with Argon2id and a random salt.
 pub fn hash_password(password: &str) -> Result<String, String> {
@@ -30,6 +30,11 @@ pub fn new_token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Random 6-digit code (000000-999999) for password resets.
+pub fn new_reset_code() -> String {
+    format!("{:06}", rand::rngs::OsRng.gen_range(0..1_000_000u32))
+}
+
 /// Compare two secrets without leaking where they differ through timing.
 pub fn constant_time_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
@@ -52,5 +57,14 @@ mod tests {
         assert!(verify_password("hunter22", &h));
         assert!(!verify_password("wrong", &h));
         assert_eq!(new_token().len(), 64);
+    }
+
+    #[test]
+    fn reset_code_is_six_digits() {
+        for _ in 0..50 {
+            let c = new_reset_code();
+            assert_eq!(c.len(), 6);
+            assert!(c.chars().all(|ch| ch.is_ascii_digit()));
+        }
     }
 }

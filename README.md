@@ -63,6 +63,7 @@ The app creates its tables automatically on the first request.
    | `TURSO_DATABASE_URL` | the `libsql://…` URL |
    | `TURSO_AUTH_TOKEN` | the token |
    | `ADMIN_PASSWORD` | a long password for `/admin` |
+   | `BREVO_API_KEY` / `MAIL_FROM` | *(optional)* turns on "Forgot password?" emails, see [Forgot password](#forgot-password-optional) |
    | `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | *(optional)* turns on the "I'm not a robot" check, see [CAPTCHA](#captcha-optional) |
 
 4. **Deploy.** The first build compiles Rust and takes a few minutes; later builds are cached.
@@ -84,6 +85,16 @@ Sign in, Create account and the admin sign-in can require Cloudflare Turnstile (
 2. Add the **Site Key** as `TURNSTILE_SITE_KEY` and the **Secret Key** as `TURNSTILE_SECRET_KEY` in Vercel, then **Redeploy**.
 
 The token is verified on the server, so bots can't skip it by calling the API directly. If either variable is missing the check is simply off (the default for the offline .exe apps). To test locally use Cloudflare's dummy keys: site `1x00000000000000000000AA`, secret `1x0000000000000000000000000000000AA` (always pass).
+
+### Forgot password (optional)
+
+When set up, the customer sign-in screen shows **Forgot password?**. The customer enters their email, waits for a 6-digit code (valid 10 minutes), then enters the code and a new password. Setting a new password signs them in and signs out their other devices.
+
+1. Create a free account at https://www.brevo.com and open **SMTP & API → API Keys → Generate a new API key**.
+2. Under **Senders, Domains & Dedicated IPs → Senders**, add the address you want emails to come from (e.g. your shop's Gmail) and click the verification link Brevo emails to it.
+3. In Vercel add `BREVO_API_KEY` (the key) and `MAIL_FROM` (that verified address). Optionally add `MAIL_FROM_NAME` (default: the shop name). Then **Redeploy**.
+
+If either variable is missing the link is hidden. Codes are stored hashed, expire after 10 minutes, are limited to 5 wrong guesses, and a new code can be requested once a minute. If the Turnstile CAPTCHA is on, it also guards the "send code" step. If emails don't arrive, check **Vercel → Logs** for lines starting with `[mail]`. Brevo's own error is printed there.
 
 ### How it's wired
 

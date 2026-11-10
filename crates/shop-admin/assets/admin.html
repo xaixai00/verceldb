@@ -636,11 +636,25 @@ async function loadCustomers() {
   try {
     const list = await api('/api/customers');
     area.innerHTML = list.length ? `<div class="panel table-wrap"><table>
-      <thead><tr><th>Name</th><th>Email</th><th class="hide-sm">Joined</th><th>Items in cart</th></tr></thead>
-      <tbody>${list.map(c => `<tr><td class="t-name">${esc(c.name)}</td><td>${esc(c.email)}</td><td class="hide-sm t-sub">${esc(c.created_at)} UTC</td><td>${c.cart_quantity}</td></tr>`).join('')}</tbody>
+      <thead><tr><th>Name</th><th>Email</th><th class="hide-sm">Joined</th><th>Items in cart</th><th></th></tr></thead>
+      <tbody>${list.map(c => `<tr><td class="t-name">${esc(c.name)}</td><td>${esc(c.email)}</td><td class="hide-sm t-sub">${esc(c.created_at)} UTC</td><td>${c.cart_quantity}</td><td style="text-align:right"><button class="btn sm danger" data-delete-customer="${c.id}" data-name="${esc(c.name)}">Delete</button></td></tr>`).join('')}</tbody>
     </table></div>` : `<div class="empty"><h3>No customers yet</h3><div>Accounts appear here when people sign up on the store.</div></div>`;
   } catch (e) { toast(e.message, true); }
 }
+
+/* Delete a customer account (their sessions and cart go with it). */
+async function deleteCustomer(id, name) {
+  if (!confirm(`Delete ${name || 'this customer'}? Their account, sign-in sessions and cart will be permanently removed. This can't be undone.`)) return;
+  try {
+    await api('/api/customers/' + id, { method: 'DELETE' });
+    toast('Customer deleted');
+    loadCustomers();
+  } catch (e) { toast(e.message, true); }
+}
+$('#customers-area').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-delete-customer]');
+  if (btn) deleteCustomer(btn.dataset.deleteCustomer, btn.dataset.name);
+});
 
 
 /* ---------------- CAPTCHA (Cloudflare Turnstile, optional) ---------------- */

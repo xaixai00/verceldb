@@ -14,7 +14,7 @@ use axum::{
     http::{header, HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use base64::Engine;
@@ -83,6 +83,7 @@ pub fn router(db: Db, cfg: AdminConfig) -> Router {
         )
         .route("/api/featured", get(get_featured).put(set_featured))
         .route("/api/customers", get(customers))
+        .route("/api/customers/{id}", delete(delete_customer))
         .route("/api/demo", post(seed_demo))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
 
@@ -375,6 +376,11 @@ async fn save_settings(State(db): State<Db>, Json(s): Json<Settings>) -> ApiResu
 
 async fn customers(State(db): State<Db>) -> ApiResult<Vec<CustomerSummary>> {
     Ok(Json(db.list_customers().await?))
+}
+
+async fn delete_customer(State(db): State<Db>, Path(id): Path<i64>) -> ApiResult<Value> {
+    db.delete_customer(id).await?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn seed_demo(State(db): State<Db>) -> ApiResult<Value> {

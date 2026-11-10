@@ -13,7 +13,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use shop_core::{
     auth, captcha,
-    db::{Cart, Product, Settings, User},
+    db::{Cart, Product, Settings, User, RESET_CODE_TTL_SECS},
+    mail,
     web::{self, ApiError, ApiResult},
     Db,
 };
@@ -47,6 +48,9 @@ pub fn router(state: CustomerState) -> Router {
         .route("/api/captcha", get(captcha_config))
         .route("/api/auth/signup", post(signup))
         .route("/api/auth/login", post(login))
+        .route("/api/auth/options", get(auth_options))
+        .route("/api/auth/forgot", post(forgot_password))
+        .route("/api/auth/reset", post(reset_password))
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/me", get(me))
         .route("/api/featured", get(featured))
@@ -203,6 +207,134 @@ async fn login(
     if !ok {
         return Err(wrong());
     }
+    start_session(&state, user).await
+}
+
+// ---------------------------------------------------------------------------
+// Forgot password: email a 6-digit code, then trade the code for a new password
+// ---------------------------------------------------------------------------
+
+/// `GET /api/auth/options` – lets the page hide "Forgot password?" when email isn't set up.
+async fn auth_options() -> Json<Value> {
+    Json(json!({ "reset_enabled": mail::configured() }))
+}
+
+#[derive(Deserialize)]
+struct ForgotBody {
+    email: String,
+    #[serde(default)]
+    captcha_token: Option<String>,
+}
+
+async fn forgot_password(
+    State(state): State<CustomerState>,
+    headers: HeaderMap,
+    Json(body): Json<ForgotBody>,
+) -> ApiResult<Value> {
+    if !mail::configured() {
+        return Err(ApiError::bad_request(
+            "Password reset isn't available right now. Please contact the shop.",
+        ));
+    }
+    captcha::verify(
+        body.captcha_token.as_deref(),
+        captcha::client_ip(&headers).as_deref(),
+    )
+    .await?;
+    let email = body.email.trim().to_lowercase();
+    if !valid_email(&email) {
+        return Err(ApiError::bad_request("Please enter a valid email address"));
+    }
+
+    // Same answer whether or not the email has an account, so this can't be
+    // used to find out who is registered.
+    let sent = Ok(Json(json!({ "ok": true })));
+    let Some((user, _)) = state.db.user_credentials(&email).await? else {
+        return sent;
+    };
+    let wait = state.db.reset_cooldown_left(user.id).await?;
+    if wait > 0 {
+        return Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            format!("Please wait {wait} seconds before asking for another code"),
+        ));
+    }
+
+    let code = auth::new_reset_code();
+    let to_hash = code.clone();
+    let hash = tokio::task::spawn_blocking(move || auth::hash_password(&to_hash))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(ApiError::internal)?;
+    state.db.save_reset_code(user.id, &hash).await?;
+
+    let shop = state.db.get_settings().await?.shop_name;
+    if let Err(e) = mail::send_reset_code(
+        &user.email,
+        &user.name,
+        &shop,
+        &code,
+        RESET_CODE_TTL_SECS / 60,
+    )
+    .await
+    {
+        // Don't leave a code around that nobody received.
+        let _ = state.db.delete_reset_code(user.id).await;
+        return Err(e);
+    }
+    sent
+}
+
+#[derive(Deserialize)]
+struct ResetBody {
+    email: String,
+    code: String,
+    password: String,
+}
+
+async fn reset_password(
+    State(state): State<CustomerState>,
+    Json(body): Json<ResetBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    if body.password.chars().count() < 6 {
+        return Err(ApiError::bad_request(
+            "Password must be at least 6 characters",
+        ));
+    }
+    if body.password.len() > 256 {
+        return Err(ApiError::bad_request("Password is too long"));
+    }
+    let bad_code = || {
+        ApiError::bad_request("That code is incorrect or has expired. Please request a new one.")
+    };
+    let code = body.code.trim().to_string();
+    if code.len() != 6 || !code.chars().all(|c| c.is_ascii_digit()) {
+        return Err(bad_code());
+    }
+    let Some((user, _)) = state
+        .db
+        .user_credentials(&body.email.trim().to_lowercase())
+        .await?
+    else {
+        return Err(bad_code());
+    };
+    let Some(code_hash) = state.db.take_reset_attempt(user.id).await? else {
+        return Err(bad_code());
+    };
+    let ok = tokio::task::spawn_blocking(move || auth::verify_password(&code, &code_hash))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    if !ok {
+        return Err(bad_code());
+    }
+
+    let password = body.password;
+    let hash = tokio::task::spawn_blocking(move || auth::hash_password(&password))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(ApiError::internal)?;
+    // Saves the new password, signs out every old session and burns the code.
+    state.db.set_password(user.id, &hash).await?;
     start_session(&state, user).await
 }
 
